@@ -9,6 +9,14 @@
     }
 )
 
+(define-map permit-history
+    { permit-id: uint }
+    {
+        previous-owners: (list 10 principal),
+        transfer-dates: (list 10 uint)
+    }
+)
+
 (define-data-var permit-counter uint u0)
 (define-data-var admin principal tx-sender)
 
@@ -17,12 +25,23 @@
 (define-constant err-permit-not-found (err u101))
 (define-constant err-permit-expired (err u102))
 (define-constant err-invalid-duration (err u103))
+(define-constant err-history-full (err u104))
 
 ;; Read only functions
 (define-read-only (get-permit (permit-id uint))
     (match (map-get? permits {permit-id: permit-id})
         permit (ok permit)
         err-permit-not-found
+    )
+)
+
+(define-read-only (get-permit-history (permit-id uint))
+    (match (map-get? permit-history {permit-id: permit-id})
+        history (ok history)
+        (ok {
+            previous-owners: (list ),
+            transfer-dates: (list )
+        })
     )
 )
 
@@ -55,6 +74,14 @@
                 }
             )
             
+            (map-set permit-history
+                {permit-id: new-permit-id}
+                {
+                    previous-owners: (list owner),
+                    transfer-dates: (list block-height)
+                }
+            )
+            
             (var-set permit-counter new-permit-id)
             (ok new-permit-id)
         )
@@ -70,9 +97,16 @@
 )
 
 (define-public (transfer-permit (permit-id uint) (new-owner principal))
-    (let ((permit (unwrap! (map-get? permits {permit-id: permit-id}) err-permit-not-found)))
+    (let 
+        (
+            (permit (unwrap! (map-get? permits {permit-id: permit-id}) err-permit-not-found))
+            (history (default-to 
+                { previous-owners: (list ), transfer-dates: (list ) }
+                (map-get? permit-history {permit-id: permit-id})))
+        )
         (asserts! (is-eq tx-sender (get owner permit)) err-not-admin)
         (asserts! (> (get valid-until permit) block-height) err-permit-expired)
+        (asserts! (< (len (get previous-owners history)) u10) err-history-full)
         
         (map-set permits
             {permit-id: permit-id}
@@ -81,6 +115,14 @@
                 valid-until: (get valid-until permit),
                 zone: (get zone permit),
                 vehicle-id: (get vehicle-id permit)
+            }
+        )
+
+        (map-set permit-history
+            {permit-id: permit-id}
+            {
+                previous-owners: (append (get previous-owners history) new-owner),
+                transfer-dates: (append (get transfer-dates history) block-height)
             }
         )
         (ok true)
